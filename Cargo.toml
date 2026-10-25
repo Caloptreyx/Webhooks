@@ -2,7 +2,7 @@
 name = "dev_caloptreyx_webhooks"
 description = "Send panel and server events (power, crashes, state changes, backups, installs, ...) to webhook URLs such as Discord."
 authors = ["Caloptreyx"]
-version = "0.1.0"
+version = "0.1.1"
 edition = { workspace = true }
 
 [dependencies]
