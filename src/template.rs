@@ -1,7 +1,10 @@
 //! Request bodies: the plain envelope, the built-in Discord embed, or a
 //! user-provided minijinja template that must render to JSON.
 use crate::db::Format;
-use minijinja::{AutoEscape, Environment, UndefinedBehavior, value::ValueKind};
+use minijinja::{
+    AutoEscape, Environment, UndefinedBehavior,
+    value::{Serde, ValueKind},
+};
 use serde_json::Value;
 use std::{fmt::Write, sync::LazyLock};
 
@@ -76,7 +79,7 @@ pub fn render(format: Format, template: Option<&str>, envelope: &Value) -> Resul
     };
 
     let rendered = ENV
-        .render_str(template, envelope)
+        .render_str(template, Serde(envelope))
         .map_err(|err| describe(&err))?;
     if rendered.len() > MAX_BODY_BYTES {
         return Err(format!(

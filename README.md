@@ -4,7 +4,7 @@ A [Calagopus Panel](https://calagopus.com) extension that sends panel and server
 URLs – Discord channels, monitoring systems, automation scripts – so nothing has to poll the panel
 API. Inspired by Pelican Panel's webhooks.
 
-Package name: `dev.caloptreyx.webhooks` · Requires panel `>=1.2.2`
+Package name: `dev.caloptreyx.webhooks` · Requires panel `>=1.2.7`
 
 ## Features
 
