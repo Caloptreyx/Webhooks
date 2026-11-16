@@ -1,5 +1,5 @@
-import { Center } from '@mantine/core';
 import type { UseQueryResult } from '@tanstack/react-query';
+import { Center } from '@mantine/core';
 import { useState } from 'react';
 import { httpErrorToHuman } from '@/api/axios.ts';
 import Table from '@/elements/data-display/Table.tsx';
