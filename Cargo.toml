@@ -29,5 +29,6 @@ hex = { workspace = true }
 rand = { workspace = true }
 minijinja = { workspace = true }
 futures-util = { workspace = true }
-url = { workspace = true }
+# panel 1.2.10 dropped `url` from its workspace dependencies; 2.5 is in every panel's lockfile
+url = "2.5"
 parking_lot = { workspace = true }
