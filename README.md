@@ -75,8 +75,7 @@ see the [Calagopus docs](https://calagopus.com/docs/panel/extensions/installing-
   - *State poll interval* (default 15 s, `0` disables state and node reachability events).
   - *Server webhooks* on/off and *webhooks per server* (default 3).
   - *Account webhooks* on/off and *webhooks per account* (default 3).
-  - *Allow private targets* – per-server and account webhooks may only reach public addresses unless enabled
-    (the target is resolved and checked on every delivery; redirects are never followed).
+  - *Allow private/internal IP targets* (default off) – see [Private targets](#private-targets).
 
 Server users find their webhooks under **Webhooks** in the server sidebar, and their account
 webhooks under **Account → Webhooks**.
@@ -84,6 +83,24 @@ webhooks under **Account → Webhooks**.
 Permissions: server `webhooks.read|create|update|delete` (users without `update` see webhooks with
 the URL path, header values and secret hidden), user (API key scope) `webhooks.read|create|update|delete`,
 admin `webhooks.read|manage`.
+
+### Private targets
+
+Per-server and account webhooks are created by server users, and the panel sends their requests from
+inside your network. By default they may only reach public addresses: the target is resolved and
+checked on every delivery, the connection is pinned to the checked addresses, and redirects are never
+followed. Global (admin) webhooks are not restricted.
+
+If your receivers live on container networks or behind an internal DNS that returns private
+addresses, enable *Allow private/internal IP targets*. Per-server and account webhooks may then reach
+private (`10/8`, `172.16/12`, `192.168/16`, `fc00::/7`), loopback, link-local and carrier-grade NAT
+(`100.64/10`) addresses, whether written in the URL or returned by DNS. Cloud metadata addresses
+(`169.254.169.254`, `fd00:ec2::254`) stay blocked either way.
+
+The tradeoff is server-side request forgery (SSRF): anyone who can create a webhook can make the panel
+send POST requests to services on its internal network (databases with HTTP APIs, admin interfaces,
+wings, …) and read up to 4 KiB of each response in the delivery log. Only enable it when you trust
+your server users or the panel host cannot reach anything sensitive.
 
 ## Request format
 

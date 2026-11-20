@@ -8,7 +8,7 @@ use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue, RETRY_AF
 use sha2::{Digest, Sha256};
 use shared::State;
 use std::{
-    net::{IpAddr, Ipv4Addr, SocketAddr},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     sync::LazyLock,
     time::{Duration, Instant},
 };
@@ -59,21 +59,60 @@ pub fn signature(secret: &str, timestamp: i64, body: &str) -> String {
     )
 }
 
+/// Which addresses a webhook may reach.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Targets {
+    /// Every address (global webhooks, set up by administrators).
+    Any,
+    /// Every address except cloud metadata endpoints.
+    NotMetadata,
+    /// Public addresses only.
+    Public,
+}
+
+impl Targets {
+    pub fn allows(self, ip: IpAddr) -> bool {
+        match self {
+            Self::Any => true,
+            Self::NotMetadata => !is_cloud_metadata(ip),
+            Self::Public => is_public(ip),
+        }
+    }
+}
+
+/// The IPv4 address carried by an IPv4-mapped or NAT64 (`64:ff9b::/96`) address.
+fn embedded_v4(ip: Ipv6Addr) -> Option<Ipv4Addr> {
+    if let Some(mapped) = ip.to_ipv4_mapped() {
+        return Some(mapped);
+    }
+    let segments = ip.segments();
+    (segments[..6] == [0x64, 0xff9b, 0, 0, 0, 0]).then(|| {
+        let [a, b] = segments[6].to_be_bytes();
+        let [c, d] = segments[7].to_be_bytes();
+        Ipv4Addr::new(a, b, c, d)
+    })
+}
+
+/// Cloud instance metadata endpoints (AWS, GCP, Azure, ... on IPv4, AWS on IPv6),
+/// which hand out credentials to anything that can reach them.
+fn is_cloud_metadata(ip: IpAddr) -> bool {
+    const V4: Ipv4Addr = Ipv4Addr::new(169, 254, 169, 254);
+    const V6: Ipv6Addr = Ipv6Addr::new(0xfd00, 0xec2, 0, 0, 0, 0, 0, 0x254);
+    match ip {
+        IpAddr::V4(ip) => ip == V4,
+        IpAddr::V6(ip) => ip == V6 || embedded_v4(ip) == Some(V4),
+    }
+}
+
 /// Whether an address is reachable on the public internet.
-pub fn is_public(ip: IpAddr) -> bool {
+fn is_public(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(ip) => is_public_v4(ip),
         IpAddr::V6(ip) => {
-            if let Some(mapped) = ip.to_ipv4_mapped() {
-                return is_public_v4(mapped);
+            if let Some(v4) = embedded_v4(ip) {
+                return is_public_v4(v4);
             }
             let segments = ip.segments();
-            // NAT64 well-known prefix embeds an IPv4 address
-            if segments[..6] == [0x64, 0xff9b, 0, 0, 0, 0] {
-                let [a, b] = segments[6].to_be_bytes();
-                let [c, d] = segments[7].to_be_bytes();
-                return is_public_v4(Ipv4Addr::new(a, b, c, d));
-            }
             !(ip.is_unspecified()
                 || ip.is_loopback()
                 || ip.is_multicast()
@@ -100,9 +139,12 @@ fn is_public_v4(ip: Ipv4Addr) -> bool {
         || (a == 198 && (18..20).contains(&b))) // benchmarking
 }
 
-/// Client that can only reach public addresses: the host is resolved once,
-/// checked, and the connection pinned to the checked addresses.
-async fn restricted_client(url: &reqwest::Url) -> Result<reqwest::Client, String> {
+/// Client that can only reach addresses `targets` allows: the host is resolved
+/// once, checked, and the connection pinned to the checked addresses.
+async fn restricted_client(
+    url: &reqwest::Url,
+    targets: Targets,
+) -> Result<reqwest::Client, String> {
     let host = url.host_str().ok_or("the url has no host")?;
     let port = url.port_or_known_default().ok_or("the url has no port")?;
     let host = host.trim_start_matches('[').trim_end_matches(']');
@@ -117,11 +159,16 @@ async fn restricted_client(url: &reqwest::Url) -> Result<reqwest::Client, String
     if addrs.is_empty() {
         return Err(format!("{host} did not resolve to any address"));
     }
-    if let Some(addr) = addrs.iter().find(|addr| !is_public(addr.ip())) {
-        return Err(format!(
-            "{host} resolves to {}, which is not a public address",
-            addr.ip()
-        ));
+    if let Some(addr) = addrs.iter().find(|addr| !targets.allows(addr.ip())) {
+        let ip = addr.ip();
+        return Err(if is_cloud_metadata(ip) {
+            format!("{host} resolves to {ip}, a cloud metadata address, which webhooks never reach")
+        } else {
+            format!(
+                "{host} resolves to {ip}, which is not a public address (an administrator can \
+                 allow private/internal IP targets in the Webhooks settings)"
+            )
+        });
     }
 
     reqwest::Client::builder()
@@ -162,7 +209,7 @@ pub struct Request<'a> {
     pub delivery: Uuid,
     pub body: String,
     pub timeout: Duration,
-    pub public_only: bool,
+    pub targets: Targets,
 }
 
 pub async fn send(request: Request<'_>) -> Attempt {
@@ -171,14 +218,14 @@ pub async fn send(request: Request<'_>) -> Attempt {
         Ok(url) => url,
         Err(err) => return Attempt::failed(Some(body), format!("invalid url: {err}"), false),
     };
-    let client = if request.public_only {
-        match restricted_client(&url).await {
+    let client = if request.targets == Targets::Any {
+        CLIENT.clone()
+    } else {
+        match restricted_client(&url, request.targets).await {
             Ok(client) => client,
             // DNS may change, so a refused address is worth retrying
             Err(err) => return Attempt::failed(Some(body), err, true),
         }
-    } else {
-        CLIENT.clone()
     };
 
     let timestamp = chrono::Utc::now().timestamp();
@@ -365,7 +412,11 @@ pub async fn deliver(
         delivery: delivery.uuid,
         body,
         timeout: settings.request_timeout(),
-        public_only: webhook.is_user_managed() && !settings.allow_private_targets,
+        targets: if webhook.is_user_managed() {
+            settings.user_targets()
+        } else {
+            Targets::Any
+        },
     })
     .await;
 
@@ -446,6 +497,38 @@ mod tests {
             "::ffff:8.8.8.8",
         ] {
             assert!(is_public(ip.parse().unwrap()), "{ip} should be public");
+        }
+    }
+
+    #[test]
+    fn private_targets_still_refuse_cloud_metadata() {
+        for ip in [
+            "169.254.169.254",
+            "fd00:ec2::254",
+            "::ffff:169.254.169.254",
+            "64:ff9b::a9fe:a9fe",
+        ] {
+            let ip = ip.parse().unwrap();
+            assert!(is_cloud_metadata(ip), "{ip} is a metadata address");
+            assert!(!Targets::NotMetadata.allows(ip), "{ip} should stay blocked");
+            assert!(!Targets::Public.allows(ip), "{ip} should stay blocked");
+        }
+        for ip in [
+            "127.0.0.1",
+            "10.1.2.3",
+            "172.20.0.5",
+            "192.168.1.1",
+            "169.254.10.1",
+            "100.64.0.1",
+            "::1",
+            "fd12::1",
+            "fe80::1",
+            "1.1.1.1",
+        ] {
+            assert!(
+                Targets::NotMetadata.allows(ip.parse().unwrap()),
+                "{ip} should be allowed with private targets on"
+            );
         }
     }
 

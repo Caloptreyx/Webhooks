@@ -26,7 +26,7 @@ async fn scope(state: &State, user: Uuid) -> Result<Scope, anyhow::Error> {
     let settings = crate::settings::current(state).await?;
     Ok(Scope {
         owner: Owner::Account(user),
-        public_only: !settings.allow_private_targets,
+        targets: settings.user_targets(),
     })
 }
 

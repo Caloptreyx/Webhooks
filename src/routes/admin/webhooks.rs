@@ -13,7 +13,7 @@ async fn api_webhook(state: &State, uuid: uuid::Uuid) -> Result<ApiWebhook, ApiR
 
 const ADMIN_SCOPE: crate::validate::Scope = crate::validate::Scope {
     owner: crate::validate::Owner::Global,
-    public_only: false,
+    targets: crate::sender::Targets::Any,
 };
 
 mod list {
@@ -215,7 +215,7 @@ mod update {
         // an admin editing a user's webhook is not bound by the user rules
         let scope = Scope {
             owner: Owner::of(&webhook),
-            public_only: false,
+            targets: crate::sender::Targets::Any,
         };
         let changes = match data.into_changes(
             scope,

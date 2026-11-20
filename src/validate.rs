@@ -2,7 +2,7 @@
 use crate::{
     db::{Format, Header, NewWebhook, WebhookChanges},
     events::{self, TEST_EVENT},
-    sender::is_public,
+    sender::Targets,
     template,
 };
 use garde::Validate;
@@ -87,8 +87,8 @@ pub enum Owner {
 #[derive(Clone, Copy)]
 pub struct Scope {
     pub owner: Owner,
-    /// Refuse targets that are not public addresses.
-    pub public_only: bool,
+    /// Addresses the url may point to.
+    pub targets: Targets,
 }
 
 impl Owner {
@@ -142,15 +142,20 @@ pub fn check_url(url: &str, scope: Scope, errors: &mut Vec<String>) {
     if !parsed.username().is_empty() || parsed.password().is_some() {
         errors.push("put credentials in a header instead of the url".to_string());
     }
-    if scope.public_only {
-        let host = host.trim_start_matches('[').trim_end_matches(']');
-        let private = match host.parse::<IpAddr>() {
-            Ok(ip) => !is_public(ip),
-            Err(_) => host.eq_ignore_ascii_case("localhost") || host.ends_with(".localhost"),
-        };
-        if private {
-            errors.push("the url must point to a public address".to_string());
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    let refused = match host.parse::<IpAddr>() {
+        Ok(ip) => !scope.targets.allows(ip),
+        Err(_) => {
+            scope.targets == Targets::Public
+                && (host.eq_ignore_ascii_case("localhost") || host.ends_with(".localhost"))
         }
+    };
+    if refused {
+        errors.push(if scope.targets == Targets::Public {
+            "the url must point to a public address".to_string()
+        } else {
+            "the url must not point to a cloud metadata address".to_string()
+        });
     }
 }
 
@@ -316,15 +321,15 @@ mod tests {
 
     const SERVER: Scope = Scope {
         owner: Owner::Server(Uuid::nil()),
-        public_only: true,
+        targets: Targets::Public,
     };
     const ADMIN: Scope = Scope {
         owner: Owner::Global,
-        public_only: false,
+        targets: Targets::Any,
     };
     const ACCOUNT: Scope = Scope {
         owner: Owner::Account(Uuid::nil()),
-        public_only: true,
+        targets: Targets::Public,
     };
 
     fn payload() -> WebhookPayload {
@@ -368,6 +373,36 @@ mod tests {
         p.events = vec!["node:offline".to_string()];
         p.url = "http://127.0.0.1:8080/hook".to_string();
         assert!(p.into_new(ADMIN).is_ok());
+    }
+
+    #[test]
+    fn private_targets_setting_still_refuses_cloud_metadata() {
+        let scope = Scope {
+            owner: Owner::Server(Uuid::nil()),
+            targets: Targets::NotMetadata,
+        };
+        for url in [
+            "http://10.0.0.5:8080/hook",
+            "http://localhost/hook",
+            "http://[fd12::1]/hook",
+        ] {
+            let mut p = payload();
+            p.url = url.to_string();
+            assert!(p.into_new(scope).is_ok(), "{url} should be accepted");
+        }
+        for url in [
+            "http://169.254.169.254/latest/meta-data/",
+            "http://[fd00:ec2::254]/",
+            "http://2852039166/",
+        ] {
+            let mut p = payload();
+            p.url = url.to_string();
+            assert_eq!(
+                p.into_new(scope).unwrap_err(),
+                vec!["the url must not point to a cloud metadata address"],
+                "{url} should be refused"
+            );
+        }
     }
 
     #[test]

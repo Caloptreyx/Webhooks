@@ -1,3 +1,4 @@
+use crate::sender::Targets;
 use garde::Validate;
 use serde::{Deserialize, Serialize};
 use shared::extensions::settings::{
@@ -37,7 +38,8 @@ pub struct ExtensionSettingsData {
     #[garde(range(max = 100))]
     #[schema(maximum = 100)]
     pub account_webhook_limit: u32,
-    /// Lets per-server and account webhooks target loopback/private/link-local addresses.
+    /// Lets per-server and account webhooks target private, loopback, link-local and
+    /// carrier-grade NAT addresses. Cloud metadata addresses stay blocked.
     #[garde(skip)]
     pub allow_private_targets: bool,
 }
@@ -82,6 +84,15 @@ impl ExtensionSettingsData {
         match self.state_poll_interval_seconds {
             0 => None,
             seconds => Some(Duration::from_secs(seconds.clamp(5, 3600) as u64)),
+        }
+    }
+
+    /// Addresses per-server and account webhooks may reach.
+    pub fn user_targets(&self) -> Targets {
+        if self.allow_private_targets {
+            Targets::NotMetadata
+        } else {
+            Targets::Public
         }
     }
 }
