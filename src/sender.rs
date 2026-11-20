@@ -9,20 +9,12 @@ use sha2::{Digest, Sha256};
 use shared::State;
 use std::{
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
-    sync::LazyLock,
     time::{Duration, Instant},
 };
 use uuid::Uuid;
 
 const RESPONSE_BODY_LIMIT: usize = 4096;
 const MAX_RETRY_DELAY: Duration = Duration::from_secs(3600);
-
-static CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
-    reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .expect("reqwest client")
-});
 
 /// HMAC-SHA256 (RFC 2104).
 pub fn hmac_sha256(key: &[u8], message: &[u8]) -> [u8; 32] {
@@ -59,12 +51,11 @@ pub fn signature(secret: &str, timestamp: i64, body: &str) -> String {
     )
 }
 
-/// Which addresses a webhook may reach.
+/// Which addresses a webhook may reach. Cloud metadata endpoints are never allowed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Targets {
-    /// Every address (global webhooks, set up by administrators).
-    Any,
-    /// Every address except cloud metadata endpoints.
+    /// Every address except cloud metadata endpoints: global webhooks, and per-server
+    /// and account webhooks when private targets are allowed.
     NotMetadata,
     /// Public addresses only.
     Public,
@@ -72,11 +63,7 @@ pub enum Targets {
 
 impl Targets {
     pub fn allows(self, ip: IpAddr) -> bool {
-        match self {
-            Self::Any => true,
-            Self::NotMetadata => !is_cloud_metadata(ip),
-            Self::Public => is_public(ip),
-        }
+        !is_cloud_metadata(ip) && (self == Self::NotMetadata || is_public(ip))
     }
 }
 
@@ -93,14 +80,19 @@ fn embedded_v4(ip: Ipv6Addr) -> Option<Ipv4Addr> {
     })
 }
 
-/// Cloud instance metadata endpoints (AWS, GCP, Azure, ... on IPv4, AWS on IPv6),
-/// which hand out credentials to anything that can reach them.
+/// Cloud instance metadata endpoints, which hand out credentials to anything that
+/// can reach them: AWS/GCP/Azure/..., AWS ECS task metadata, Alibaba Cloud, and AWS
+/// over IPv6.
 fn is_cloud_metadata(ip: IpAddr) -> bool {
-    const V4: Ipv4Addr = Ipv4Addr::new(169, 254, 169, 254);
+    const V4: [Ipv4Addr; 3] = [
+        Ipv4Addr::new(169, 254, 169, 254),
+        Ipv4Addr::new(169, 254, 170, 2),
+        Ipv4Addr::new(100, 100, 100, 200),
+    ];
     const V6: Ipv6Addr = Ipv6Addr::new(0xfd00, 0xec2, 0, 0, 0, 0, 0, 0x254);
     match ip {
-        IpAddr::V4(ip) => ip == V4,
-        IpAddr::V6(ip) => ip == V6 || embedded_v4(ip) == Some(V4),
+        IpAddr::V4(ip) => V4.contains(&ip),
+        IpAddr::V6(ip) => ip == V6 || embedded_v4(ip).is_some_and(|v4| V4.contains(&v4)),
     }
 }
 
@@ -218,14 +210,10 @@ pub async fn send(request: Request<'_>) -> Attempt {
         Ok(url) => url,
         Err(err) => return Attempt::failed(Some(body), format!("invalid url: {err}"), false),
     };
-    let client = if request.targets == Targets::Any {
-        CLIENT.clone()
-    } else {
-        match restricted_client(&url, request.targets).await {
-            Ok(client) => client,
-            // DNS may change, so a refused address is worth retrying
-            Err(err) => return Attempt::failed(Some(body), err, true),
-        }
+    let client = match restricted_client(&url, request.targets).await {
+        Ok(client) => client,
+        // DNS may change, so a refused address is worth retrying
+        Err(err) => return Attempt::failed(Some(body), err, true),
     };
 
     let timestamp = chrono::Utc::now().timestamp();
@@ -415,7 +403,7 @@ pub async fn deliver(
         targets: if webhook.is_user_managed() {
             settings.user_targets()
         } else {
-            Targets::Any
+            Targets::NotMetadata
         },
     })
     .await;
@@ -501,12 +489,18 @@ mod tests {
     }
 
     #[test]
-    fn private_targets_still_refuse_cloud_metadata() {
+    fn cloud_metadata_is_refused_by_every_policy() {
         for ip in [
             "169.254.169.254",
-            "fd00:ec2::254",
             "::ffff:169.254.169.254",
             "64:ff9b::a9fe:a9fe",
+            "169.254.170.2",
+            "::ffff:169.254.170.2",
+            "64:ff9b::a9fe:aa02",
+            "100.100.100.200",
+            "::ffff:100.100.100.200",
+            "64:ff9b::6464:64c8",
+            "fd00:ec2::254",
         ] {
             let ip = ip.parse().unwrap();
             assert!(is_cloud_metadata(ip), "{ip} is a metadata address");
@@ -519,7 +513,9 @@ mod tests {
             "172.20.0.5",
             "192.168.1.1",
             "169.254.10.1",
+            "169.254.170.3",
             "100.64.0.1",
+            "100.100.100.201",
             "::1",
             "fd12::1",
             "fe80::1",
@@ -527,7 +523,7 @@ mod tests {
         ] {
             assert!(
                 Targets::NotMetadata.allows(ip.parse().unwrap()),
-                "{ip} should be allowed with private targets on"
+                "{ip} should be allowed for global webhooks and with private targets on"
             );
         }
     }

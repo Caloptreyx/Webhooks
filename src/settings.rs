@@ -39,7 +39,7 @@ pub struct ExtensionSettingsData {
     #[schema(maximum = 100)]
     pub account_webhook_limit: u32,
     /// Lets per-server and account webhooks target private, loopback, link-local and
-    /// carrier-grade NAT addresses. Cloud metadata addresses stay blocked.
+    /// carrier-grade NAT addresses. Cloud metadata endpoints stay blocked for every webhook.
     #[garde(skip)]
     pub allow_private_targets: bool,
 }

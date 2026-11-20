@@ -219,7 +219,7 @@ const translations = defineTranslations({
           accountWebhookLimitDescription: 'Maximum number of account webhooks each user may create (0 to 100).',
           allowPrivateTargets: 'Allow private/internal IP targets',
           allowPrivateTargetsDescription:
-            'Let per-server and account webhooks reach private, loopback, link-local and CGNAT addresses, given literally or returned by DNS (for container networks and internal DNS). Cloud metadata addresses (169.254.169.254, fd00:ec2::254) stay blocked. Risk: server users can then send requests from the panel into your internal network (SSRF), so only enable this when you trust them or the panel cannot reach anything sensitive.',
+            'Let per-server and account webhooks reach private, loopback, link-local and CGNAT addresses, given literally or returned by DNS (for container networks and internal DNS). Cloud metadata endpoints (169.254.169.254, 169.254.170.2, 100.100.100.200, fd00:ec2::254) stay blocked for every webhook. Risk: server users can then send requests from the panel into your internal network (SSRF), so only enable this when you trust them or the panel cannot reach anything sensitive.',
           invalidPollInterval: 'Use 0 to disable or a value between 5 and 3600.',
           save: 'Save',
           saved: 'Settings saved.',

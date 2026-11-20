@@ -325,7 +325,7 @@ mod tests {
     };
     const ADMIN: Scope = Scope {
         owner: Owner::Global,
-        targets: Targets::Any,
+        targets: Targets::NotMetadata,
     };
     const ACCOUNT: Scope = Scope {
         owner: Owner::Account(Uuid::nil()),
@@ -376,32 +376,38 @@ mod tests {
     }
 
     #[test]
-    fn private_targets_setting_still_refuses_cloud_metadata() {
-        let scope = Scope {
+    fn cloud_metadata_is_refused_for_admin_webhooks_and_with_private_targets() {
+        let private_server = Scope {
             owner: Owner::Server(Uuid::nil()),
             targets: Targets::NotMetadata,
         };
-        for url in [
-            "http://10.0.0.5:8080/hook",
-            "http://localhost/hook",
-            "http://[fd12::1]/hook",
-        ] {
-            let mut p = payload();
-            p.url = url.to_string();
-            assert!(p.into_new(scope).is_ok(), "{url} should be accepted");
-        }
-        for url in [
-            "http://169.254.169.254/latest/meta-data/",
-            "http://[fd00:ec2::254]/",
-            "http://2852039166/",
-        ] {
-            let mut p = payload();
-            p.url = url.to_string();
-            assert_eq!(
-                p.into_new(scope).unwrap_err(),
-                vec!["the url must not point to a cloud metadata address"],
-                "{url} should be refused"
-            );
+        for scope in [ADMIN, private_server] {
+            for url in [
+                "http://10.0.0.5:8080/hook",
+                "http://localhost/hook",
+                "http://[fd12::1]/hook",
+            ] {
+                let mut p = payload();
+                p.url = url.to_string();
+                assert!(p.into_new(scope).is_ok(), "{url} should be accepted");
+            }
+            for url in [
+                "http://169.254.169.254/latest/meta-data/",
+                "http://2852039166/",
+                "http://169.254.170.2/v2/credentials",
+                "http://100.100.100.200/latest/meta-data/",
+                "http://[::ffff:100.100.100.200]/",
+                "http://[64:ff9b::a9fe:aa02]/",
+                "http://[fd00:ec2::254]/",
+            ] {
+                let mut p = payload();
+                p.url = url.to_string();
+                assert_eq!(
+                    p.into_new(scope).unwrap_err(),
+                    vec!["the url must not point to a cloud metadata address"],
+                    "{url} should be refused"
+                );
+            }
         }
     }
 

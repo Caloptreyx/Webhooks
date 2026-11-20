@@ -86,16 +86,24 @@ admin `webhooks.read|manage`.
 
 ### Private targets
 
+Every delivery's target is resolved and checked, the connection is pinned to the checked addresses
+(so DNS cannot swap in another address between check and send), and redirects are never followed.
+
+Cloud metadata endpoints are always refused, for every webhook including global (admin) ones and
+whatever the settings say: `169.254.169.254` (AWS, GCP, Azure, …), `169.254.170.2` (AWS ECS task
+metadata), `100.100.100.200` (Alibaba Cloud) and `fd00:ec2::254` (AWS over IPv6), also in their
+IPv4-mapped (`::ffff:…`) and NAT64 (`64:ff9b::…`) forms. They hand out cloud credentials to anything
+that can reach them.
+
 Per-server and account webhooks are created by server users, and the panel sends their requests from
-inside your network. By default they may only reach public addresses: the target is resolved and
-checked on every delivery, the connection is pinned to the checked addresses, and redirects are never
-followed. Global (admin) webhooks are not restricted.
+inside your network, so by default they may only reach public addresses. Global (admin) webhooks may
+reach every other address.
 
 If your receivers live on container networks or behind an internal DNS that returns private
 addresses, enable *Allow private/internal IP targets*. Per-server and account webhooks may then reach
 private (`10/8`, `172.16/12`, `192.168/16`, `fc00::/7`), loopback, link-local and carrier-grade NAT
-(`100.64/10`) addresses, whether written in the URL or returned by DNS. Cloud metadata addresses
-(`169.254.169.254`, `fd00:ec2::254`) stay blocked either way.
+(`100.64/10`) addresses, whether written in the URL or returned by DNS, except the metadata endpoints
+above.
 
 The tradeoff is server-side request forgery (SSRF): anyone who can create a webhook can make the panel
 send POST requests to services on its internal network (databases with HTTP APIs, admin interfaces,
