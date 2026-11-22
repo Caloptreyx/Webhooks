@@ -48,8 +48,11 @@ Notes:
 - Server webhooks subscribing to `server:activity` or `server:console.command` need the
   `activity.read` permission in addition to `webhooks.create`/`webhooks.update`. Any change to such a
   webhook, opening one of its activity deliveries and resending one need `activity.read` as well.
-- The template preview needs `webhooks.create` or `webhooks.update` (admins: `webhooks.manage`) and
-  is refused while that webhook type is switched off.
+- The template preview needs `webhooks.create` or `webhooks.update` (admins: `webhooks.manage`).
+- While an administrator has switched per-server or account webhooks off, webhooks of that type
+  send nothing (queued retries and redeliveries included), and creating, editing, testing,
+  resending, rotating the secret and previewing are refused. Users can still list, view and
+  delete them.
 - Account webhooks follow the user's current access: a subuser only receives events of servers where
   they hold `webhooks.read` (and `activity.read` for the two events above), and nothing while the
   account is suspended. When a server is deleted it is removed from every server filter; a webhook

@@ -1,5 +1,6 @@
 use crate::{
     db::{ApiWebhook, JoinedWebhook, Webhook},
+    settings::ExtensionSettingsData,
     validate::{Owner, Scope},
 };
 use shared::{State, models::user::PermissionManager, response::ApiResponse};
@@ -28,6 +29,14 @@ async fn api_webhook(state: &State, uuid: Uuid, redact: bool) -> Result<ApiWebho
     Ok(joined
         .into_api(&state.database, redact, &HashMap::new())
         .await?)
+}
+
+/// The settings, or a 403 while server webhooks are switched off.
+async fn enabled_settings(
+    state: &State,
+    server: Uuid,
+) -> Result<ExtensionSettingsData, ApiResponse> {
+    super::enabled_settings(state, Owner::Server(server)).await
 }
 
 /// Events that mirror the server's activity log, which has its own permission.
@@ -163,12 +172,7 @@ mod create {
             permissions.has_server_permission("activity.read")?;
         }
 
-        let settings = crate::settings::current(&state).await?;
-        if !settings.server_webhooks_enabled {
-            return ApiResponse::error("server webhooks are disabled by an administrator")
-                .with_status(StatusCode::FORBIDDEN)
-                .ok();
-        }
+        let settings = super::enabled_settings(&state, server.uuid).await?;
         if Webhook::count_by_server(&state.database, server.uuid).await?
             >= i64::from(settings.server_webhook_limit)
         {
@@ -234,6 +238,7 @@ mod update {
             return response.ok();
         }
         permissions.has_server_permission("webhooks.update")?;
+        super::enabled_settings(&state, server.uuid).await?;
 
         let webhook = super::find_webhook(&state, server.uuid, webhook).await?;
         if super::update_needs_activity_permission(&webhook.events, data.events.as_deref()) {
@@ -344,6 +349,7 @@ mod test {
         Path((_server, webhook)): Path<(String, uuid::Uuid)>,
     ) -> ApiResponseResult {
         permissions.has_server_permission("webhooks.update")?;
+        super::enabled_settings(&state, server.uuid).await?;
 
         let webhook = super::find_webhook(&state, server.uuid, webhook).await?;
         ApiResponse::new_serialized(Response {
@@ -387,6 +393,7 @@ mod rotate_secret {
         Path((_server, webhook)): Path<(String, uuid::Uuid)>,
     ) -> ApiResponseResult {
         permissions.has_server_permission("webhooks.update")?;
+        super::enabled_settings(&state, server.uuid).await?;
 
         let webhook = super::find_webhook(&state, server.uuid, webhook).await?;
         let secret = Webhook::rotate_secret(&state.database, webhook.uuid).await?;
@@ -535,6 +542,7 @@ mod redeliver {
         Path((_server, webhook, delivery)): Path<(String, uuid::Uuid, uuid::Uuid)>,
     ) -> ApiResponseResult {
         permissions.has_server_permission("webhooks.update")?;
+        super::enabled_settings(&state, server.uuid).await?;
 
         let webhook = super::find_webhook(&state, server.uuid, webhook).await?;
         let delivery = Delivery::by_uuid(&state.database, delivery, Some(webhook.uuid))
@@ -562,11 +570,10 @@ mod redeliver {
 
 mod preview {
     use crate::routes::{PreviewPayload, PreviewResponse};
-    use axum::http::StatusCode;
     use shared::{
         ApiError, GetState,
         models::{server::GetServer, user::GetPermissionManager},
-        response::{ApiResponse, ApiResponseResult},
+        response::ApiResponseResult,
     };
 
     #[utoipa::path(post, path = "/preview", responses(
@@ -581,14 +588,7 @@ mod preview {
         shared::Payload(data): shared::Payload<PreviewPayload>,
     ) -> ApiResponseResult {
         super::can_edit_webhooks(&permissions)?;
-        if !crate::settings::current(&state)
-            .await?
-            .server_webhooks_enabled
-        {
-            return ApiResponse::error("server webhooks are disabled by an administrator")
-                .with_status(StatusCode::FORBIDDEN)
-                .ok();
-        }
+        super::enabled_settings(&state, server.uuid).await?;
 
         Ok(crate::routes::preview(&state, data, true, Some(server.uuid)).await?)
     }

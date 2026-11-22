@@ -169,14 +169,16 @@ const translations = defineTranslations({
     pages: {
       server: {
         empty: 'No webhooks have been created yet.',
-        disabled: 'Webhooks have been disabled for servers by an administrator.',
+        disabled:
+          'Webhooks have been disabled for servers by an administrator. Existing webhooks send nothing and can only be viewed or deleted.',
         limitReached: 'This server has reached its limit of {limit} webhooks.',
       },
       account: {
         description:
           'Account webhooks receive server events of every server you own or can access as a subuser with the webhook read permission, or only of the servers you select.',
         empty: 'You have not created any account webhooks yet.',
-        disabled: 'Account webhooks have been disabled by an administrator.',
+        disabled:
+          'Account webhooks have been disabled by an administrator. Existing webhooks send nothing and can only be viewed or deleted.',
         limitReached: 'You have reached your limit of {limit} account webhooks.',
       },
       admin: {

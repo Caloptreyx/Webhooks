@@ -3,6 +3,7 @@
 use crate::{
     db::{ClaimedDelivery, Delivery, DeliveryOutcome, DeliveryStatus, Header, Next, Webhook},
     settings::ExtensionSettingsData,
+    validate::Owner,
 };
 use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue, RETRY_AFTER, USER_AGENT};
 use sha2::{Digest, Sha256};
@@ -347,7 +348,9 @@ pub fn next_step(attempt: &Attempt, attempts_done: i32, max_attempts: i32) -> Ne
 }
 
 /// Renders, sends and records one delivery. `manual` sends (tests) go out
-/// even to disabled webhooks and are never retried.
+/// even to disabled webhooks and are never retried. Nothing goes out, queued
+/// retries and redeliveries included, while an administrator has switched the
+/// webhook's type off.
 pub async fn deliver(
     state: &State,
     settings: &ExtensionSettingsData,
@@ -360,8 +363,13 @@ pub async fn deliver(
     };
     let attempts_done = delivery.attempts + 1;
 
-    if !webhook.enabled && !manual {
-        let attempt = Attempt::failed(None, "the webhook is disabled".to_string(), false);
+    let refused = if !webhook.enabled && !manual {
+        Some("the webhook is disabled")
+    } else {
+        settings.owner_disabled(Owner::of(&webhook))
+    };
+    if let Some(reason) = refused {
+        let attempt = Attempt::failed(None, reason.to_string(), false);
         Delivery::record(
             db,
             delivery.uuid,

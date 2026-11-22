@@ -1,6 +1,7 @@
 //! Webhooks on a user's account, covering (some of) the user's servers.
 use crate::{
     db::{ApiWebhook, JoinedWebhook, Webhook},
+    settings::ExtensionSettingsData,
     validate::{Owner, Scope},
 };
 use shared::{State, response::ApiResponse};
@@ -20,6 +21,11 @@ async fn api_webhook(state: &State, uuid: Uuid) -> Result<ApiWebhook, ApiRespons
         .ok_or_else(|| super::not_found("webhook"))?;
     let names = JoinedWebhook::filter_names(&state.database, std::slice::from_ref(&joined)).await?;
     Ok(joined.into_api(&state.database, false, &names).await?)
+}
+
+/// The settings, or a 403 while account webhooks are switched off.
+async fn enabled_settings(state: &State, user: Uuid) -> Result<ExtensionSettingsData, ApiResponse> {
+    super::enabled_settings(state, Owner::Account(user)).await
 }
 
 async fn scope(state: &State, user: Uuid) -> Result<Scope, anyhow::Error> {
@@ -137,12 +143,7 @@ mod create {
         }
         permissions.has_user_permission("webhooks.create")?;
 
-        let settings = crate::settings::current(&state).await?;
-        if !settings.account_webhooks_enabled {
-            return ApiResponse::error("account webhooks are disabled by an administrator")
-                .with_status(StatusCode::FORBIDDEN)
-                .ok();
-        }
+        let settings = super::enabled_settings(&state, user.uuid).await?;
         if Webhook::count_by_user(&state.database, user.uuid).await?
             >= i64::from(settings.account_webhook_limit)
         {
@@ -206,6 +207,7 @@ mod update {
             return response.ok();
         }
         permissions.has_user_permission("webhooks.update")?;
+        super::enabled_settings(&state, user.uuid).await?;
 
         let webhook = super::find_webhook(&state, user.uuid, webhook).await?;
         if let Some(filter) = &data.server_filter {
@@ -310,6 +312,7 @@ mod test {
         Path(webhook): Path<uuid::Uuid>,
     ) -> ApiResponseResult {
         permissions.has_user_permission("webhooks.update")?;
+        super::enabled_settings(&state, user.uuid).await?;
 
         let webhook = super::find_webhook(&state, user.uuid, webhook).await?;
         ApiResponse::new_serialized(Response {
@@ -350,6 +353,7 @@ mod rotate_secret {
         Path(webhook): Path<uuid::Uuid>,
     ) -> ApiResponseResult {
         permissions.has_user_permission("webhooks.update")?;
+        super::enabled_settings(&state, user.uuid).await?;
 
         let webhook = super::find_webhook(&state, user.uuid, webhook).await?;
         let secret = Webhook::rotate_secret(&state.database, webhook.uuid).await?;
@@ -494,6 +498,7 @@ mod redeliver {
         Path((webhook, delivery)): Path<(uuid::Uuid, uuid::Uuid)>,
     ) -> ApiResponseResult {
         permissions.has_user_permission("webhooks.update")?;
+        super::enabled_settings(&state, user.uuid).await?;
 
         let webhook = super::find_webhook(&state, user.uuid, webhook).await?;
         let delivery = Delivery::by_uuid(&state.database, delivery, Some(webhook.uuid))
@@ -518,11 +523,10 @@ mod redeliver {
 
 mod preview {
     use crate::routes::{PreviewPayload, PreviewResponse};
-    use axum::http::StatusCode;
     use shared::{
         ApiError, GetState,
-        models::user::GetPermissionManager,
-        response::{ApiResponse, ApiResponseResult},
+        models::user::{GetPermissionManager, GetUser},
+        response::ApiResponseResult,
     };
 
     #[utoipa::path(post, path = "/preview", responses(
@@ -533,20 +537,14 @@ mod preview {
     pub async fn route(
         state: GetState,
         permissions: GetPermissionManager,
+        user: GetUser,
         shared::Payload(data): shared::Payload<PreviewPayload>,
     ) -> ApiResponseResult {
         // previews are for users who may create or change webhooks
         permissions
             .has_user_permission("webhooks.create")
             .or_else(|_| permissions.has_user_permission("webhooks.update"))?;
-        if !crate::settings::current(&state)
-            .await?
-            .account_webhooks_enabled
-        {
-            return ApiResponse::error("account webhooks are disabled by an administrator")
-                .with_status(StatusCode::FORBIDDEN)
-                .ok();
-        }
+        super::enabled_settings(&state, user.uuid).await?;
 
         Ok(crate::routes::preview(&state, data, true, None).await?)
     }

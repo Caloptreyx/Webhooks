@@ -1,4 +1,4 @@
-use crate::sender::Targets;
+use crate::{sender::Targets, validate::Owner};
 use garde::Validate;
 use serde::{Deserialize, Serialize};
 use shared::extensions::settings::{
@@ -95,6 +95,20 @@ impl ExtensionSettingsData {
             Targets::Public
         }
     }
+
+    /// Why webhooks of `owner`'s type may not be created, changed or sent:
+    /// an administrator switched that type off. Global webhooks have no switch.
+    pub fn owner_disabled(&self, owner: Owner) -> Option<&'static str> {
+        match owner {
+            Owner::Server(_) if !self.server_webhooks_enabled => {
+                Some("server webhooks are disabled by an administrator")
+            }
+            Owner::Account(_) if !self.account_webhooks_enabled => {
+                Some("account webhooks are disabled by an administrator")
+            }
+            _ => None,
+        }
+    }
 }
 
 #[async_trait::async_trait]
@@ -168,4 +182,29 @@ pub async fn current(state: &shared::State) -> Result<ExtensionSettingsData, any
         .find_extension_settings::<ExtensionSettingsData>()
         .cloned()
         .unwrap_or_default())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use uuid::Uuid;
+
+    #[test]
+    fn switches_cover_only_their_own_webhook_type() {
+        let (server, account) = (Owner::Server(Uuid::nil()), Owner::Account(Uuid::nil()));
+        let mut settings = ExtensionSettingsData::default();
+        assert_eq!(settings.owner_disabled(server), None);
+        assert_eq!(settings.owner_disabled(account), None);
+
+        settings.server_webhooks_enabled = false;
+        assert!(settings.owner_disabled(server).is_some());
+        assert_eq!(settings.owner_disabled(account), None);
+        assert_eq!(settings.owner_disabled(Owner::Global), None);
+
+        settings.server_webhooks_enabled = true;
+        settings.account_webhooks_enabled = false;
+        assert_eq!(settings.owner_disabled(server), None);
+        assert!(settings.owner_disabled(account).is_some());
+        assert_eq!(settings.owner_disabled(Owner::Global), None);
+    }
 }

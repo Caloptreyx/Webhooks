@@ -48,7 +48,10 @@ export default function ClientWebhookList({
 
   const [openModal, setOpenModal] = useState<OpenModal>(null);
 
-  const test = useWebhookTest({ api, events: data?.events ?? [], canRedeliver: canUpdate, onTested: refetch });
+  // while an administrator has switched this webhook type off, webhooks can only be viewed and deleted
+  const editable = canUpdate && data?.enabled !== false;
+
+  const test = useWebhookTest({ api, events: data?.events ?? [], canRedeliver: editable, onTested: refetch });
 
   const count = data?.webhooks.length ?? 0;
 
@@ -68,7 +71,7 @@ export default function ClientWebhookList({
           events={data.events}
           defaultTemplates={data.defaultTemplates}
           serverFilterPicker={serverFilterPicker}
-          canRotateSecret={canUpdate}
+          canRotateSecret={editable}
           onSaved={refetch}
         />
       )}
@@ -94,7 +97,7 @@ export default function ClientWebhookList({
             filters={{ webhook: openModal.webhook.uuid }}
             events={data?.events ?? []}
             showWebhook={false}
-            canRedeliver={canUpdate}
+            canRedeliver={editable}
           />
         )}
       </Modal>
@@ -125,7 +128,7 @@ export default function ClientWebhookList({
             key={webhook.uuid}
             api={api}
             webhook={webhook}
-            canUpdate={canUpdate}
+            canUpdate={editable}
             canDelete={canDelete}
             serverFilterEmptyLabel={serverFilterPicker?.emptyLabel ?? null}
             onEdit={() => setOpenModal({ kind: 'edit', webhook })}

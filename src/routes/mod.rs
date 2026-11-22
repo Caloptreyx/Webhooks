@@ -1,6 +1,8 @@
 use crate::{
     db::{ClaimedDelivery, Delivery, DeliverySummary, Format, Webhook},
     events::{self, EVENTS, EventDef, ServerRef, TEST_EVENT},
+    settings::ExtensionSettingsData,
+    validate::Owner,
 };
 use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
@@ -36,6 +38,20 @@ async fn validate_blocking<T: Send + 'static>(
 
 fn not_found(what: &str) -> ApiResponse {
     ApiResponse::error(format!("{what} not found")).with_status(StatusCode::NOT_FOUND)
+}
+
+/// The extension settings, or a 403 while an administrator has switched off
+/// webhooks of `owner`'s type (server or account). Listing, viewing and
+/// deleting stay possible so users can clean up.
+async fn enabled_settings(
+    state: &State,
+    owner: Owner,
+) -> Result<ExtensionSettingsData, ApiResponse> {
+    let settings = crate::settings::current(state).await?;
+    match settings.owner_disabled(owner) {
+        Some(message) => Err(ApiResponse::error(message).with_status(StatusCode::FORBIDDEN)),
+        None => Ok(settings),
+    }
 }
 
 #[derive(ToSchema, Serialize)]
