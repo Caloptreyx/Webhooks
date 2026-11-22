@@ -21,6 +21,24 @@ Package name: `dev.caloptreyx.webhooks` · Requires panel `>=1.2.10`
   request/response details and a one-click **redeliver**.
 - **Test button** and a **template preview** for every event.
 
+## Screenshots
+
+**Server webhooks**: a Discord and a JSON webhook with their last delivery.
+
+![Server Webhooks page](docs/screenshots/server-webhooks.png)
+
+**Create Webhook**: format, URL and the events that trigger it.
+
+![Create Webhook dialog](docs/screenshots/create-webhook.png)
+
+**Delivery**: status, response and the event payload of a test delivery.
+
+![Delivery details](docs/screenshots/delivery.png)
+
+**Admin settings**: delivery retries, retention, state polling and limits.
+
+![Webhooks admin settings](docs/screenshots/admin-settings.png)
+
 ## Events
 
 | Category | Events |
