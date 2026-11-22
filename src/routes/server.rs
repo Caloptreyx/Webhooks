@@ -33,10 +33,25 @@ async fn api_webhook(state: &State, uuid: Uuid, redact: bool) -> Result<ApiWebho
 /// Events that mirror the server's activity log, which has its own permission.
 const ACTIVITY_EVENTS: &[&str] = &["server:activity", "server:console.command"];
 
+fn is_activity_event(event: &str) -> bool {
+    ACTIVITY_EVENTS.contains(&event)
+}
+
 fn needs_activity_permission(events: &[String]) -> bool {
-    events
-        .iter()
-        .any(|event| ACTIVITY_EVENTS.contains(&event.as_str()))
+    events.iter().any(|event| is_activity_event(event))
+}
+
+/// Any change to a webhook that carries (or would carry) activity events can
+/// redirect them, so it needs `activity.read` whatever the patch touches.
+fn update_needs_activity_permission(current: &[String], new: Option<&[String]>) -> bool {
+    needs_activity_permission(current) || new.is_some_and(needs_activity_permission)
+}
+
+/// Template previews are for users who may create or change webhooks.
+fn can_edit_webhooks(permissions: &PermissionManager) -> Result<(), ApiResponse> {
+    permissions
+        .has_server_permission("webhooks.create")
+        .or_else(|_| permissions.has_server_permission("webhooks.update"))
 }
 
 async fn scope(state: &State, server: Uuid) -> Result<Scope, anyhow::Error> {
@@ -162,10 +177,8 @@ mod create {
                 .ok();
         }
 
-        let new = match data.into_new(super::scope(&state, server.uuid).await?) {
-            Ok(new) => new,
-            Err(errors) => return crate::routes::bad_request(errors).ok(),
-        };
+        let scope = super::scope(&state, server.uuid).await?;
+        let new = crate::routes::validate_blocking(move || data.into_new(scope)).await?;
         let mut log = serde_json::json!({ "name": new.name, "events": new.events });
         let uuid = Webhook::create(&state.database, new).await?;
         log["uuid"] = serde_json::json!(uuid);
@@ -221,24 +234,21 @@ mod update {
             return response.ok();
         }
         permissions.has_server_permission("webhooks.update")?;
-        if data
-            .events
-            .as_deref()
-            .is_some_and(super::needs_activity_permission)
-        {
-            permissions.has_server_permission("activity.read")?;
-        }
 
         let webhook = super::find_webhook(&state, server.uuid, webhook).await?;
-        let changes = match data.into_changes(
-            super::scope(&state, server.uuid).await?,
+        if super::update_needs_activity_permission(&webhook.events, data.events.as_deref()) {
+            permissions.has_server_permission("activity.read")?;
+        }
+        let scope = super::scope(&state, server.uuid).await?;
+        let (format, events, template) = (
             webhook.format,
-            &webhook.events,
-            webhook.body_template.as_deref(),
-        ) {
-            Ok(changes) => changes,
-            Err(errors) => return crate::routes::bad_request(errors).ok(),
-        };
+            webhook.events.clone(),
+            webhook.body_template.clone(),
+        );
+        let changes = crate::routes::validate_blocking(move || {
+            data.into_changes(scope, format, &events, template.as_deref())
+        })
+        .await?;
         let log = serde_json::json!({
             "uuid": webhook.uuid,
             "name": changes.name.as_ref().unwrap_or(&webhook.name),
@@ -482,6 +492,10 @@ mod delivery {
         let delivery = Delivery::by_uuid(&state.database, delivery, Some(webhook.uuid))
             .await?
             .ok_or_else(|| crate::routes::not_found("delivery"))?;
+        // the payload and request body of an activity event are activity log entries
+        if super::is_activity_event(&delivery.summary.event) {
+            permissions.has_server_permission("activity.read")?;
+        }
         ApiResponse::new_serialized(Response { delivery }).ok()
     }
 }
@@ -526,6 +540,9 @@ mod redeliver {
         let delivery = Delivery::by_uuid(&state.database, delivery, Some(webhook.uuid))
             .await?
             .ok_or_else(|| crate::routes::not_found("delivery"))?;
+        if super::is_activity_event(&delivery.summary.event) {
+            permissions.has_server_permission("activity.read")?;
+        }
         let copy = crate::routes::redeliver(&state, &delivery).await?;
 
         activity_logger
@@ -545,15 +562,17 @@ mod redeliver {
 
 mod preview {
     use crate::routes::{PreviewPayload, PreviewResponse};
+    use axum::http::StatusCode;
     use shared::{
         ApiError, GetState,
         models::{server::GetServer, user::GetPermissionManager},
-        response::ApiResponseResult,
+        response::{ApiResponse, ApiResponseResult},
     };
 
     #[utoipa::path(post, path = "/preview", responses(
         (status = OK, body = PreviewResponse),
         (status = BAD_REQUEST, body = ApiError),
+        (status = FORBIDDEN, body = ApiError),
     ), params(("server" = uuid::Uuid, description = "The server ID")), request_body = PreviewPayload)]
     pub async fn route(
         state: GetState,
@@ -561,7 +580,15 @@ mod preview {
         server: GetServer,
         shared::Payload(data): shared::Payload<PreviewPayload>,
     ) -> ApiResponseResult {
-        permissions.has_server_permission("webhooks.read")?;
+        super::can_edit_webhooks(&permissions)?;
+        if !crate::settings::current(&state)
+            .await?
+            .server_webhooks_enabled
+        {
+            return ApiResponse::error("server webhooks are disabled by an administrator")
+                .with_status(StatusCode::FORBIDDEN)
+                .ok();
+        }
 
         Ok(crate::routes::preview(&state, data, true, Some(server.uuid)).await?)
     }
@@ -580,4 +607,32 @@ pub fn router(state: &State) -> OpenApiRouter<State> {
         .routes(routes!(redeliver::route))
         .routes(routes!(preview::route))
         .with_state(state.clone())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn events(ids: &[&str]) -> Vec<String> {
+        ids.iter().map(|id| id.to_string()).collect()
+    }
+
+    #[test]
+    fn any_update_of_an_activity_webhook_needs_activity_read() {
+        let activity = events(&["server:crash", "server:activity"]);
+        let plain = events(&["server:crash"]);
+        // url-only patch of a webhook that already carries activity events
+        assert!(update_needs_activity_permission(&activity, None));
+        // dropping the activity events is still a change to an activity webhook
+        assert!(update_needs_activity_permission(
+            &activity,
+            Some(&plain[..])
+        ));
+        assert!(update_needs_activity_permission(
+            &plain,
+            Some(&events(&["server:console.command"])[..])
+        ));
+        assert!(!update_needs_activity_permission(&plain, None));
+        assert!(!update_needs_activity_permission(&plain, Some(&plain[..])));
+    }
 }

@@ -52,7 +52,8 @@ mod preview {
         permissions: GetPermissionManager,
         shared::Payload(data): shared::Payload<PreviewPayload>,
     ) -> ApiResponseResult {
-        permissions.has_admin_permission("webhooks.read")?;
+        // previews are for admins who may create or change webhooks
+        permissions.has_admin_permission("webhooks.manage")?;
 
         Ok(crate::routes::preview(&state, data, false, None).await?)
     }

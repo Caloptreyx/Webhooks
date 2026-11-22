@@ -119,10 +119,8 @@ mod create {
         }
         permissions.has_admin_permission("webhooks.manage")?;
 
-        let new = match data.into_new(super::ADMIN_SCOPE) {
-            Ok(new) => new,
-            Err(errors) => return crate::routes::bad_request(errors).ok(),
-        };
+        let new =
+            crate::routes::validate_blocking(move || data.into_new(super::ADMIN_SCOPE)).await?;
         let log = serde_json::json!({ "name": new.name, "events": new.events });
         let uuid = Webhook::create(&state.database, new).await?;
 
@@ -217,15 +215,15 @@ mod update {
             owner: Owner::of(&webhook),
             targets: crate::sender::Targets::NotMetadata,
         };
-        let changes = match data.into_changes(
-            scope,
+        let (format, events, template) = (
             webhook.format,
-            &webhook.events,
-            webhook.body_template.as_deref(),
-        ) {
-            Ok(changes) => changes,
-            Err(errors) => return crate::routes::bad_request(errors).ok(),
-        };
+            webhook.events.clone(),
+            webhook.body_template.clone(),
+        );
+        let changes = crate::routes::validate_blocking(move || {
+            data.into_changes(scope, format, &events, template.as_deref())
+        })
+        .await?;
         let log = serde_json::json!({
             "uuid": webhook.uuid,
             "name": changes.name.as_ref().unwrap_or(&webhook.name),

@@ -372,11 +372,13 @@ pub async fn deliver(
         return Ok(());
     }
 
-    let body = match crate::template::render(
+    let body = match crate::template::render_blocking(
         webhook.format,
-        webhook.body_template.as_deref(),
-        &delivery.payload,
-    ) {
+        webhook.body_template.clone(),
+        delivery.payload.clone(),
+    )
+    .await
+    {
         Ok(body) => body,
         Err(err) => {
             let attempt = Attempt::failed(None, err, false);

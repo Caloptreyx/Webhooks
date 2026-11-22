@@ -22,6 +22,18 @@ fn bad_request(errors: Vec<String>) -> ApiResponse {
         .with_status(StatusCode::BAD_REQUEST)
 }
 
+/// Runs a payload check that renders its template (once per selected event)
+/// on the blocking pool; failures become a 400.
+async fn validate_blocking<T: Send + 'static>(
+    check: impl FnOnce() -> Result<T, Vec<String>> + Send + 'static,
+) -> Result<T, ApiResponse> {
+    match crate::template::run_blocking(check).await {
+        Ok(Ok(value)) => Ok(value),
+        Ok(Err(errors)) => Err(bad_request(errors)),
+        Err(err) => Err(bad_request(vec![err])),
+    }
+}
+
 fn not_found(what: &str) -> ApiResponse {
     ApiResponse::error(format!("{what} not found")).with_status(StatusCode::NOT_FOUND)
 }
@@ -64,10 +76,14 @@ const DEFAULT_TEMPLATES: DefaultTemplates = DefaultTemplates {
     discord: crate::template::DEFAULT_DISCORD_TEMPLATE,
 };
 
-#[derive(ToSchema, Deserialize)]
+#[derive(ToSchema, garde::Validate, Deserialize)]
 pub struct PreviewPayload {
+    #[garde(skip)]
     format: Format,
+    #[garde(inner(length(chars, max = 16384)))]
+    #[schema(max_length = 16384)]
     body_template: Option<String>,
+    #[garde(skip)]
     event: String,
 }
 
@@ -84,6 +100,9 @@ async fn preview(
     server_events_only: bool,
     server: Option<Uuid>,
 ) -> Result<ApiResponse, anyhow::Error> {
+    if let Some(response) = validation_error(&payload) {
+        return Ok(response);
+    }
     let Some(event) = events::find(&payload.event) else {
         return Ok(bad_request(vec![format!(
             "unknown event `{}`",
@@ -103,7 +122,7 @@ async fn preview(
     let (panel_name, panel_url) = crate::dispatch::panel_identity(state).await?;
     let envelope = events::sample(event, server).envelope(&panel_name, &panel_url);
 
-    match crate::template::render(payload.format, payload.body_template.as_deref(), &envelope) {
+    match crate::template::render_blocking(payload.format, payload.body_template, envelope).await {
         Ok(body) => {
             let value: serde_json::Value = serde_json::from_str(&body)?;
             Ok(ApiResponse::new_serialized(PreviewResponse {

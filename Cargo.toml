@@ -27,7 +27,7 @@ tokio = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
 rand = { workspace = true }
-minijinja = { workspace = true }
+minijinja = { workspace = true, features = ["fuel"] }
 futures-util = { workspace = true }
 # panel 1.2.10 dropped `url` from its workspace dependencies; 2.5 is in every panel's lockfile
 url = "2.5"

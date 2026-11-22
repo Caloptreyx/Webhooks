@@ -152,10 +152,8 @@ mod create {
         }
         super::check_filter(&state, user.uuid, &data.server_filter).await?;
 
-        let new = match data.into_new(super::scope(&state, user.uuid).await?) {
-            Ok(new) => new,
-            Err(errors) => return crate::routes::bad_request(errors).ok(),
-        };
+        let scope = super::scope(&state, user.uuid).await?;
+        let new = crate::routes::validate_blocking(move || data.into_new(scope)).await?;
         let mut log = serde_json::json!({ "name": new.name, "events": new.events });
         let uuid = Webhook::create(&state.database, new).await?;
         log["uuid"] = serde_json::json!(uuid);
@@ -213,15 +211,16 @@ mod update {
         if let Some(filter) = &data.server_filter {
             super::check_filter(&state, user.uuid, filter).await?;
         }
-        let changes = match data.into_changes(
-            super::scope(&state, user.uuid).await?,
+        let scope = super::scope(&state, user.uuid).await?;
+        let (format, events, template) = (
             webhook.format,
-            &webhook.events,
-            webhook.body_template.as_deref(),
-        ) {
-            Ok(changes) => changes,
-            Err(errors) => return crate::routes::bad_request(errors).ok(),
-        };
+            webhook.events.clone(),
+            webhook.body_template.clone(),
+        );
+        let changes = crate::routes::validate_blocking(move || {
+            data.into_changes(scope, format, &events, template.as_deref())
+        })
+        .await?;
         let log = serde_json::json!({
             "uuid": webhook.uuid,
             "name": changes.name.as_ref().unwrap_or(&webhook.name),
@@ -519,20 +518,35 @@ mod redeliver {
 
 mod preview {
     use crate::routes::{PreviewPayload, PreviewResponse};
+    use axum::http::StatusCode;
     use shared::{
-        ApiError, GetState, models::user::GetPermissionManager, response::ApiResponseResult,
+        ApiError, GetState,
+        models::user::GetPermissionManager,
+        response::{ApiResponse, ApiResponseResult},
     };
 
     #[utoipa::path(post, path = "/preview", responses(
         (status = OK, body = PreviewResponse),
         (status = BAD_REQUEST, body = ApiError),
+        (status = FORBIDDEN, body = ApiError),
     ), request_body = PreviewPayload)]
     pub async fn route(
         state: GetState,
         permissions: GetPermissionManager,
         shared::Payload(data): shared::Payload<PreviewPayload>,
     ) -> ApiResponseResult {
-        permissions.has_user_permission("webhooks.read")?;
+        // previews are for users who may create or change webhooks
+        permissions
+            .has_user_permission("webhooks.create")
+            .or_else(|_| permissions.has_user_permission("webhooks.update"))?;
+        if !crate::settings::current(&state)
+            .await?
+            .account_webhooks_enabled
+        {
+            return ApiResponse::error("account webhooks are disabled by an administrator")
+                .with_status(StatusCode::FORBIDDEN)
+                .ok();
+        }
 
         Ok(crate::routes::preview(&state, data, true, None).await?)
     }

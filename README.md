@@ -4,7 +4,7 @@ A [Calagopus Panel](https://calagopus.com) extension that sends panel and server
 URLs – Discord channels, monitoring systems, automation scripts – so nothing has to poll the panel
 API. Inspired by Pelican Panel's webhooks.
 
-Package name: `dev.caloptreyx.webhooks` · Requires panel `>=1.2.7`
+Package name: `dev.caloptreyx.webhooks` · Requires panel `>=1.2.10`
 
 ## Features
 
@@ -46,7 +46,10 @@ Notes:
   missed; the first poll after startup only records a baseline. Polling only runs while a webhook
   listens to one of these events.
 - Server webhooks subscribing to `server:activity` or `server:console.command` need the
-  `activity.read` permission in addition to `webhooks.create`/`webhooks.update`.
+  `activity.read` permission in addition to `webhooks.create`/`webhooks.update`. Any change to such a
+  webhook, opening one of its activity deliveries and resending one need `activity.read` as well.
+- The template preview needs `webhooks.create` or `webhooks.update` (admins: `webhooks.manage`) and
+  is refused while that webhook type is switched off.
 - Account webhooks follow the user's current access: a subuser only receives events of servers where
   they hold `webhooks.read` (and `activity.read` for the two events above), and nothing while the
   account is suspended. When a server is deleted it is removed from every server filter; a webhook
@@ -165,6 +168,8 @@ def verify(secret: str, headers, body: bytes) -> bool:
 A body template is a JSON document rendered with [minijinja](https://docs.rs/minijinja) against the
 envelope. `{{ … }}` output is escaped for use inside JSON strings; use `|tojson` to embed raw JSON.
 The result must be valid JSON; templates are checked against every selected event when saved.
+Rendering has a work budget (minijinja fuel) and a 64 KiB output limit; a template that exceeds
+either fails with an error instead of sending.
 
 ```json
 {

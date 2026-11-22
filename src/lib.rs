@@ -104,7 +104,7 @@ impl Extension for ExtensionStruct {
                 permissions: IndexMap::from([
                     (
                         "read",
-                        "Allows viewing the server's webhooks (without their urls and secrets) and their deliveries.",
+                        "Allows viewing the server's webhooks (without their urls and secrets) and their deliveries. Activity log deliveries also require activity.read.",
                     ),
                     (
                         "create",
@@ -112,7 +112,7 @@ impl Extension for ExtensionStruct {
                     ),
                     (
                         "update",
-                        "Allows viewing and changing webhooks including urls and secrets, testing them and resending deliveries.",
+                        "Allows viewing and changing webhooks including urls and secrets, testing them and resending deliveries. Webhooks with activity log events also require activity.read.",
                     ),
                     ("delete", "Allows deleting the server's webhooks."),
                 ]),
