@@ -8,7 +8,7 @@ import { getExtTranslations } from './translations.ts';
 
 class CaloptreyxWebhooksExtension extends Extension {
   public cardConfigurationPage: React.FC | null = AdminConfigurationPage;
-  public cardIcon: React.ReactNode = <FontAwesomeIcon icon={faBell} />;
+  public cardIcon = <FontAwesomeIcon icon={faBell} />;
 
   public initialize(ctx: ExtensionContext): void {
     ctx.extensionRegistry.enterRoutes((routes) =>
