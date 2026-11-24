@@ -31,7 +31,8 @@ class CaloptreyxWebhooksExtension extends Extension {
     ctx.extensionRegistry.enterPermissionIcons((icons) =>
       icons
         .addServerPermissionIcon('webhooks', <FontAwesomeIcon icon={faBell} />)
-        .addAdminPermissionIcon('webhooks', <FontAwesomeIcon icon={faBell} />),
+        .addAdminPermissionIcon('webhooks', <FontAwesomeIcon icon={faBell} />)
+        .addUserPermissionIcon('webhooks', <FontAwesomeIcon icon={faBell} />),
     );
   }
 }
